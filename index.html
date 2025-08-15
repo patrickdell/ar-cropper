@@ -284,30 +284,38 @@
       return outCanvas;
     }
 
-    // ---- JPEG metadata handling (EXIF/IPTC/XMP/ICC) ----
+    // ---- JPEG metadata handling (focus on IPTC + XMP only to avoid Orientation issues) ----
     function extractJpegMetaSegments(buffer){
-      // Extract APP1/APP2/APP13/APP14 JPEG segments (Exif, ICC, IPTC, Adobe)
+      // Keep only APP13 (Photoshop IPTC) and APP1 XMP packets. Skip EXIF to avoid double-rotation issues.
       const view = new DataView(buffer);
       const u8 = new Uint8Array(buffer);
-      const wanted = new Set([0xE1, 0xE2, 0xED, 0xEE]);
       const segs = [];
       if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return segs; // not JPEG
       let i = 2; // after SOI
       while (i + 4 <= u8.length){
-        // look for 0xFF fill bytes
         if (u8[i] !== 0xFF) { i++; continue; }
         while (i < u8.length && u8[i] === 0xFF) i++;
         if (i >= u8.length) break;
         const marker = u8[i++];
         if (marker === 0xDA /*SOS*/ || marker === 0xD9 /*EOI*/) break;
         if (i + 2 > u8.length) break;
-        const len = view.getUint16(i, false); // big-endian
-        const segStart = i - 2;              // points to 0xFF before marker
-        const segEnd = i + len;              // end exclusive
+        const len = view.getUint16(i, false);
+        const segStart = i - 2; // at 0xFF
+        const segEnd = i + len;
         if (segEnd > u8.length) break;
-        if (wanted.has(marker)){
-          // IMPORTANT: start at segStart (0xFF), not segStart-1
-          segs.push(u8.slice(segStart, segEnd));
+        if ((marker & 0xF0) === 0xE0){
+          if (marker === 0xED){ // APP13 (IPTC/Photoshop)
+            // Confirm signature "Photoshop 3.0 "
+            const sig = "Photoshop 3.0 ";
+            let ok = true; for (let k=0;k<sig.length && (i+2+k)<segEnd;k++){ if (u8[i+2+k] !== sig.charCodeAt(k)) { ok=false; break; } }
+            if (ok) segs.push(u8.slice(segStart, segEnd));
+          } else if (marker === 0xE1){ // APP1 (Exif or XMP)
+            // XMP packets start with "http://ns.adobe.com/xap/1.0/ "
+            const xmpSig = "http://ns.adobe.com/xap/1.0/ ";
+            let isXmp = true; for (let k=0;k<xmpSig.length && (i+2+k)<segEnd;k++){ if (u8[i+2+k] !== xmpSig.charCodeAt(k)) { isXmp=false; break; } }
+            if (isXmp) segs.push(u8.slice(segStart, segEnd));
+            // NOTE: deliberately skipping EXIF to prevent orientation tag conflicts
+          }
         }
         i = segEnd;
       }
@@ -315,16 +323,26 @@
     }
 
     async function attachMetadataToJpegBlob(blob, metaSegments){
+      // Insert our metadata after any existing APP0 (JFIF) in the encoded JPEG
       if (!metaSegments || metaSegments.length === 0) return blob;
       const outBuf = await blob.arrayBuffer();
-      const outU8 = new Uint8Array(outBuf);
-      if (outU8.length < 2 || outU8[0] !== 0xFF || outU8[1] !== 0xD8) return blob; // not JPEG
+      const u8 = new Uint8Array(outBuf);
+      if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return blob;
+      let insertPos = 2; // after SOI
+      // If canvas encoder emitted APP0 JFIF, skip it so JFIF stays first
+      if (u8[2] === 0xFF && u8[3] === 0xE0 && u8.length >= 6){
+        const len = (u8[4] << 8) | u8[5];
+        if (6 + len <= u8.length) insertPos = 2 + 2 + len; // SOI + (0xFF E0 + len + data)
+      }
       const metaLen = metaSegments.reduce((sum, seg) => sum + seg.length, 0);
-      const merged = new Uint8Array(2 + metaLen + (outU8.length - 2));
-      merged[0] = 0xFF; merged[1] = 0xD8;
-      let off = 2;
+      const merged = new Uint8Array(u8.length + metaLen);
+      // copy: before insert
+      merged.set(u8.subarray(0, insertPos), 0);
+      // copy: meta
+      let off = insertPos;
       for (const seg of metaSegments){ merged.set(seg, off); off += seg.length; }
-      merged.set(outU8.subarray(2), off);
+      // copy: rest
+      merged.set(u8.subarray(insertPos), off);
       return new Blob([merged], { type: 'image/jpeg' });
     }
 
