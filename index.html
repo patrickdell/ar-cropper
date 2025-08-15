@@ -134,6 +134,11 @@
     let cropCenter = { x: 0, y: 0 };
     let baseCrop = { w: 0, h: 0 }; // largest crop that fits at current AR
 
+    // preview modal live-update state
+    let previewOpen = false;
+    let previewRAF = null;
+    let currentPreviewURL = null; // largest crop that fits at current AR
+
     // simple history for Undo
     const history = [];
     function pushHistory(){ if(!img) return; const state = { ratioStr, cropCenter: { ...cropCenter }, zoom: Number(zoom.value) }; history.push(state); undoBtn.disabled = history.length === 0; }
@@ -175,6 +180,8 @@
       const cw = crop.w*disp.scale, ch = crop.h*disp.scale;
       ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.fillRect(cx, cy, cw, ch); ctx.restore();
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(cx, cy, cw, ch);
+      // if preview is open, update it on next frame (throttled)
+      if (previewOpen) schedulePreviewUpdate();
     }
 
     function enableControls(){ chips.forEach(c=>c.disabled=false); zoom.disabled=false; downloadBtn.disabled=false; previewBtn.disabled=false; resetBtn.disabled=false; }
@@ -222,17 +229,37 @@
       return outCanvas;
     }
 
+    function schedulePreviewUpdate(){
+      if (previewRAF) return; // already scheduled
+      previewRAF = requestAnimationFrame(() => {
+        previewRAF = null;
+        const c = renderCroppedToCanvas();
+        if (!c) return;
+        c.toBlob((blob)=>{
+          if (!blob) return;
+          const url = URL.createObjectURL(blob);
+          if (currentPreviewURL) URL.revokeObjectURL(currentPreviewURL);
+          currentPreviewURL = url;
+          modalImg.src = url; saveFromModal.href = url;
+        }, 'image/jpeg', 0.92);
+      });
+    }
+
     // Preview modal
     function openPreview(){
-      const outCanvas = renderCroppedToCanvas(); if (!outCanvas) return;
-      outCanvas.toBlob((blob)=>{
-        if(!blob){ alert('Preview failed.'); return; }
-        const url = URL.createObjectURL(blob);
-        modalImg.src = url; saveFromModal.href = url; modal.classList.add('show'); modal.setAttribute('aria-hidden','false');
-      }, 'image/jpeg', 0.92);
+      previewOpen = true;
+      schedulePreviewUpdate();
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden','false');
     }
     previewBtn.addEventListener('click', openPreview);
-    closeModal.addEventListener('click', ()=>{ modal.classList.remove('show'); modal.setAttribute('aria-hidden','true'); if (modalImg.src) { URL.revokeObjectURL(modalImg.src); modalImg.src=''; } });
+    closeModal.addEventListener('click', ()=>{
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden','true');
+      previewOpen = false;
+      if (currentPreviewURL) { URL.revokeObjectURL(currentPreviewURL); currentPreviewURL = null; }
+      modalImg.src='';
+    });
     modal.addEventListener('click', (e)=>{ if(e.target===modal) { closeModal.click(); } });
 
     // Download (no resizing)
