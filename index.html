@@ -259,7 +259,7 @@
       const url = URL.createObjectURL(file);
       const image = new Image();
       image.onload = async () => { URL.revokeObjectURL(url); img=image; enableControls(); chips.forEach(c=>c.classList.remove('active')); chips[0].classList.add('active'); ratioStr = chips[0].dataset.ratio; resetCrop(); history.length=0; draw();
-        try { const buf = await file.arrayBuffer(); originalMetaSegments = extractJpegMetaSegments(buf); } catch(e) { originalMetaSegments = []; }
+        try { const buf = await file.arrayBuffer(); const det = detectMetadataKinds(buf); setMetaChip(det.hasIPTC, det.hasXMP, det.hasICC); originalMetaSegments = extractJpegMetaSegments(buf); } catch(e) { originalMetaSegments = []; setMetaChip(false,false,false); }
       };
       image.onerror = () => { URL.revokeObjectURL(url); alert('Failed to load image.'); };
       image.src = url;
