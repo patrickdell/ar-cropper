@@ -22,21 +22,28 @@
     .chip { padding:6px 10px; border:1px solid var(--line); background:#10131a; color: var(--ink); border-radius:999px; cursor:pointer; font-size:12px; }
     .chip.active { border-color: var(--accent); }
     .chip:disabled { opacity: .5; cursor: not-allowed; }
-    .actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .btn { cursor: pointer; background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
     .btn.secondary { background: #10131a; border:1px solid var(--line); color: var(--ink); }
+    .btn.ghost { background: transparent; border:1px dashed var(--line); color: var(--ink); }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
     .preview { background:#0a0d12; border:1px solid var(--line); border-radius:12px; display:flex; align-items:center; justify-content:center; aspect-ratio: 16 / 9; position:relative; }
     canvas { max-width: 100%; height: auto; border-radius: 12px; cursor: grab; }
     canvas.dragging { cursor: grabbing; }
     .muted { color: var(--muted); }
     .zoomrow { display:flex; align-items:center; gap:10px; }
     .zoomrow output { min-width: 48px; text-align: right; color: var(--muted); }
+    /* modal */
+    .modal { position: fixed; inset: 0; display:none; align-items:center; justify-content:center; background: rgba(0,0,0,0.6); z-index: 1000; }
+    .modal.show { display:flex; }
+    .modal-card { background: #0f131a; border:1px solid var(--line); border-radius: 14px; max-width: 90vw; max-height: 90vh; padding: 12px; }
+    .modal-card img { max-width: 85vw; max-height: 80vh; display:block; border-radius: 10px; }
+    .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top: 8px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>QuickCrop</h1>
-    <p class="sub">Upload an image first. Then pick an aspect ratio, pan the crop by dragging and adjust size with the zoom. Download the cropped JPEG. <strong>No resizing/scaling of output</strong> — the export is the exact cropped pixels.</p>
+    <p class="sub">Upload an image first. Then pick an aspect ratio, pan the crop by dragging and adjust size with the zoom. Preview or download the cropped JPEG. <strong>No resizing/scaling of output</strong> — the export is the exact cropped pixels.</p>
 
     <!-- 1) Upload -->
     <div class="card" style="margin-bottom:16px;">
@@ -44,7 +51,7 @@
         <div style="grid-column: span 12;">
           <label>Upload Image</label>
           <input id="file" type="file" accept="image/*" />
-          <p class="muted" style="margin-top:6px;">JPEG/PNG/WebP supported. Drag on the preview to pan. Zoom changes the crop window size.</p>
+          <p class="muted" style="margin-top:6px;">JPEG/PNG/WebP supported. Drag on the preview to pan. Use the zoom slider to change crop size.</p>
         </div>
       </div>
     </div>
@@ -74,9 +81,27 @@
           </div>
         </div>
 
-        <div style="grid-column: span 12; display:flex; justify-content:flex-end;">
-          <button id="download" class="btn" disabled>Download Cropped JPG</button>
+        <div style="grid-column: span 12; display:flex; justify-content:space-between; gap:8px;">
+          <div class="row">
+            <button id="undoBtn" class="btn secondary" disabled>Undo</button>
+            <button id="resetBtn" class="btn ghost" disabled>Reset</button>
+          </div>
+          <div class="row">
+            <button id="previewBtn" class="btn secondary" disabled>Preview</button>
+            <button id="downloadBtn" class="btn" disabled>Download Cropped JPG</button>
+          </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Preview -->
+  <div id="modal" class="modal" aria-hidden="true">
+    <div class="modal-card">
+      <img id="modalImg" alt="Cropped preview" />
+      <div class="modal-actions">
+        <button id="closeModal" class="btn secondary">Close</button>
+        <a id="saveFromModal" class="btn" download="crop.jpg">Download JPG</a>
       </div>
     </div>
   </div>
@@ -89,7 +114,16 @@
     const ctx = previewCanvas.getContext('2d');
     const zoom = document.getElementById('zoom');
     const zoomOut = document.getElementById('zoomOut');
-    const downloadBtn = document.getElementById('download');
+
+    const previewBtn = document.getElementById('previewBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const undoBtn = document.getElementById('undoBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    const modal = document.getElementById('modal');
+    const modalImg = document.getElementById('modalImg');
+    const closeModal = document.getElementById('closeModal');
+    const saveFromModal = document.getElementById('saveFromModal');
 
     // state
     let img = null;
@@ -99,6 +133,15 @@
     // crop state in image coords
     let cropCenter = { x: 0, y: 0 };
     let baseCrop = { w: 0, h: 0 }; // largest crop that fits at current AR
+
+    // simple history for Undo
+    const history = [];
+    function pushHistory(){ if(!img) return; const state = { ratioStr, cropCenter: { ...cropCenter }, zoom: Number(zoom.value) }; history.push(state); undoBtn.disabled = history.length === 0; }
+    function popHistory(){
+      const prev = history.pop();
+      undoBtn.disabled = history.length === 0;
+      return prev || null;
+    }
 
     // helpers
     function ratioToNumber(str){ const [a,b] = str.split(':').map(Number); return a>0 && b>0 ? a/b : 1; }
@@ -134,12 +177,12 @@
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(cx, cy, cw, ch);
     }
 
-    function enableControls(){ chips.forEach(c=>c.disabled=false); zoom.disabled=false; downloadBtn.disabled=false; }
+    function enableControls(){ chips.forEach(c=>c.disabled=false); zoom.disabled=false; downloadBtn.disabled=false; previewBtn.disabled=false; resetBtn.disabled=false; }
     function resetCrop(){ if (!img) return; cropCenter = { x: img.width/2, y: img.height/2 }; zoom.value = 1; zoomOut.textContent = '1.00×'; }
 
     // interactions
-    chips.forEach(btn => btn.addEventListener('click', () => { ratioStr = btn.dataset.ratio; chips.forEach(c=>c.classList.toggle('active', c===btn)); resetCrop(); draw(); }));
-    zoom.addEventListener('input', () => { zoomOut.textContent = `${Number(zoom.value).toFixed(2)}×`; draw(); });
+    chips.forEach(btn => btn.addEventListener('click', () => { pushHistory(); ratioStr = btn.dataset.ratio; chips.forEach(c=>c.classList.toggle('active', c===btn)); resetCrop(); draw(); }));
+    zoom.addEventListener('input', () => { pushHistory(); zoomOut.textContent = `${Number(zoom.value).toFixed(2)}×`; draw(); });
 
     let dragging=false, dragOffset={x:0,y:0};
     previewCanvas.addEventListener('mousedown', (e)=>{
@@ -147,6 +190,7 @@
       const rect=previewCanvas.getBoundingClientRect(); const mx=e.clientX-rect.left, my=e.clientY-rect.top;
       const ix=(mx - disp.x)/disp.scale, iy=(my - disp.y)/disp.scale; const crop=getCurrentCrop(); if(!crop) return;
       dragOffset.x = ix - (crop.x + crop.w/2); dragOffset.y = iy - (crop.y + crop.h/2);
+      pushHistory();
     });
     window.addEventListener('mouseup',()=>{dragging=false; previewCanvas.classList.remove('dragging');});
     window.addEventListener('mousemove',(e)=>{
@@ -160,26 +204,63 @@
     // file handling
     fileInput.addEventListener('change', () => {
       const file = fileInput.files && fileInput.files[0];
-      if (!file) { img=null; draw(); return; }
+      if (!file) { img=null; draw(); chips.forEach(c=>c.disabled=true); zoom.disabled=true; downloadBtn.disabled=true; previewBtn.disabled=true; resetBtn.disabled=true; undoBtn.disabled=true; history.length=0; return; }
       const url = URL.createObjectURL(file);
       const image = new Image();
-      image.onload = () => { URL.revokeObjectURL(url); img=image; enableControls(); chips[0].click(); draw(); };
+      image.onload = () => { URL.revokeObjectURL(url); img=image; enableControls(); chips.forEach(c=>c.classList.remove('active')); chips[0].classList.add('active'); ratioStr = chips[0].dataset.ratio; resetCrop(); history.length=0; draw(); };
       image.onerror = () => { URL.revokeObjectURL(url); alert('Failed to load image.'); };
       image.src = url;
     });
 
-    // export (no resizing — canvas size = crop size)
-    downloadBtn.addEventListener('click', () => {
-      if (!img) { alert('Upload an image first.'); return; }
-      const crop = getCurrentCrop(); if (!crop) return;
+    // export helpers
+    function renderCroppedToCanvas(){
+      if (!img) return null;
+      const crop = getCurrentCrop(); if (!crop) return null;
       const outCanvas = document.createElement('canvas'); outCanvas.width = crop.w; outCanvas.height = crop.h;
       const octx = outCanvas.getContext('2d'); octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = 'high';
       octx.drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+      return outCanvas;
+    }
+
+    // Preview modal
+    function openPreview(){
+      const outCanvas = renderCroppedToCanvas(); if (!outCanvas) return;
+      outCanvas.toBlob((blob)=>{
+        if(!blob){ alert('Preview failed.'); return; }
+        const url = URL.createObjectURL(blob);
+        modalImg.src = url; saveFromModal.href = url; modal.classList.add('show'); modal.setAttribute('aria-hidden','false');
+      }, 'image/jpeg', 0.92);
+    }
+    previewBtn.addEventListener('click', openPreview);
+    closeModal.addEventListener('click', ()=>{ modal.classList.remove('show'); modal.setAttribute('aria-hidden','true'); if (modalImg.src) { URL.revokeObjectURL(modalImg.src); modalImg.src=''; } });
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) { closeModal.click(); } });
+
+    // Download (no resizing)
+    downloadBtn.addEventListener('click', () => {
+      const outCanvas = renderCroppedToCanvas(); if (!outCanvas) { alert('Upload an image first.'); return; }
       outCanvas.toBlob((blob)=>{
         if(!blob){ alert('Export failed.'); return; }
-        const a=document.createElement('a'); const url=URL.createObjectURL(blob); a.href=url; a.download=`crop_${crop.w}x${crop.h}.jpg`;
+        const a=document.createElement('a'); const url=URL.createObjectURL(blob); a.href=url; a.download='crop.jpg';
         document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
       }, 'image/jpeg', 0.92);
+    });
+
+    // Undo & Reset
+    undoBtn.addEventListener('click', ()=>{
+      const prev = popHistory(); if (!prev) return;
+      ratioStr = prev.ratioStr; chips.forEach(c=>c.classList.toggle('active', c.dataset.ratio===ratioStr));
+      cropCenter = { ...prev.cropCenter }; zoom.value = prev.zoom; zoomOut.textContent = `${Number(zoom.value).toFixed(2)}×`;
+      draw();
+    });
+
+    resetBtn.addEventListener('click', ()=>{
+      // Clear image and pick the first aspect ratio
+      img = null; history.length=0; previewCanvas.getContext('2d').clearRect(0,0,previewCanvas.width,previewCanvas.height);
+      chips.forEach(c=>{ c.disabled=true; c.classList.remove('active'); });
+      if (chips[0]) chips[0].classList.add('active');
+      ratioStr = chips[0] ? chips[0].dataset.ratio : '3:2';
+      zoom.value = 1; zoomOut.textContent = '1.00×';
+      downloadBtn.disabled = true; previewBtn.disabled = true; resetBtn.disabled = true; undoBtn.disabled = true; zoom.disabled = true;
     });
 
     // initial paint
