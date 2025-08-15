@@ -43,7 +43,7 @@
 <body>
   <div class="wrap">
     <h1>QuickCrop</h1>
-    <p class="sub">Upload an image, choose an aspect ratio, pan the crop by dragging or arrow keys and zoom with mouse wheel or slider. Preview, then download the cropped JPEG. <strong>No resizing/scaling of output</strong> — export is exact cropped pixels. IPTC/EXIF is preserved from source JPEG.</p>
+    <p class="sub">Upload an image, choose an aspect ratio, pan the crop by dragging or arrow keys and zoom with mouse wheel or slider. Preview, then download the cropped JPEG. <strong>No resizing/scaling of output</strong> — export is exact cropped pixels. IPTC/XMP/ICC metadata is preserved from source JPEG (EXIF intentionally skipped to avoid orientation issues)..</p>
 
     <!-- 1) Upload -->
     <div class="card" style="margin-bottom:16px;">
@@ -286,7 +286,8 @@
 
     // ---- JPEG metadata handling (focus on IPTC + XMP only to avoid Orientation issues) ----
     function extractJpegMetaSegments(buffer){
-      // Keep only APP13 (Photoshop IPTC) and APP1 XMP packets. Skip EXIF to avoid double-rotation issues.
+      // Keep APP13 (IPTC/Photoshop), APP1 XMP, and APP2 ICC profile.
+      // Skip EXIF (APP1) to avoid Orientation conflicts.
       const view = new DataView(buffer);
       const u8 = new Uint8Array(buffer);
       const segs = [];
@@ -300,21 +301,23 @@
         if (marker === 0xDA /*SOS*/ || marker === 0xD9 /*EOI*/) break;
         if (i + 2 > u8.length) break;
         const len = view.getUint16(i, false);
-        const segStart = i - 2; // at 0xFF
+        const segStart = i - 2; // 0xFF at segStart
         const segEnd = i + len;
         if (segEnd > u8.length) break;
         if ((marker & 0xF0) === 0xE0){
           if (marker === 0xED){ // APP13 (IPTC/Photoshop)
-            // Confirm signature "Photoshop 3.0 "
             const sig = "Photoshop 3.0 ";
             let ok = true; for (let k=0;k<sig.length && (i+2+k)<segEnd;k++){ if (u8[i+2+k] !== sig.charCodeAt(k)) { ok=false; break; } }
             if (ok) segs.push(u8.slice(segStart, segEnd));
-          } else if (marker === 0xE1){ // APP1 (Exif or XMP)
-            // XMP packets start with "http://ns.adobe.com/xap/1.0/ "
+          } else if (marker === 0xE1){ // APP1 (EXIF or XMP)
             const xmpSig = "http://ns.adobe.com/xap/1.0/ ";
             let isXmp = true; for (let k=0;k<xmpSig.length && (i+2+k)<segEnd;k++){ if (u8[i+2+k] !== xmpSig.charCodeAt(k)) { isXmp=false; break; } }
-            if (isXmp) segs.push(u8.slice(segStart, segEnd));
-            // NOTE: deliberately skipping EXIF to prevent orientation tag conflicts
+            if (isXmp) segs.push(u8.slice(segStart, segEnd)); // keep XMP
+            // else: EXIF — intentionally skipped
+          } else if (marker === 0xE2){ // APP2 (ICC profile)
+            const iccSig = "ICC_PROFILE ";
+            let ok = true; for (let k=0;k<iccSig.length && (i+2+k)<segEnd;k++){ if (u8[i+2+k] !== iccSig.charCodeAt(k)) { ok=false; break; } }
+            if (ok) segs.push(u8.slice(segStart, segEnd));
           }
         }
         i = segEnd;
