@@ -286,25 +286,28 @@
 
     // ---- JPEG metadata handling (EXIF/IPTC/XMP/ICC) ----
     function extractJpegMetaSegments(buffer){
-      const bytes = new DataView(buffer);
+      // Extract APP1/APP2/APP13/APP14 JPEG segments (Exif, ICC, IPTC, Adobe)
+      const view = new DataView(buffer);
       const u8 = new Uint8Array(buffer);
-      const wanted = new Set([0xE1, 0xE2, 0xED, 0xEE]); // APP1, APP2 (ICC), APP13 (IPTC), APP14 (Adobe)
+      const wanted = new Set([0xE1, 0xE2, 0xED, 0xEE]);
       const segs = [];
+      if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return segs; // not JPEG
       let i = 2; // after SOI
-      if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return segs;
       while (i + 4 <= u8.length){
-        if (u8[i] !== 0xFF){ i++; continue; }
-        while (u8[i] === 0xFF) i++;
+        // look for 0xFF fill bytes
+        if (u8[i] !== 0xFF) { i++; continue; }
+        while (i < u8.length && u8[i] === 0xFF) i++;
+        if (i >= u8.length) break;
         const marker = u8[i++];
-        if (marker === 0xDA || marker === 0xD9){ break; }
+        if (marker === 0xDA /*SOS*/ || marker === 0xD9 /*EOI*/) break;
         if (i + 2 > u8.length) break;
-        const len = bytes.getUint16(i);
-        const segStart = i - 2;
-        const segEnd = i + len;
+        const len = view.getUint16(i, false); // big-endian
+        const segStart = i - 2;              // points to 0xFF before marker
+        const segEnd = i + len;              // end exclusive
         if (segEnd > u8.length) break;
-        if ((marker & 0xF0) === 0xE0 && wanted.has(marker)){
-          const fullStart = segStart - 1; // include 0xFF before marker
-          segs.push(u8.slice(fullStart, segEnd));
+        if (wanted.has(marker)){
+          // IMPORTANT: start at segStart (0xFF), not segStart-1
+          segs.push(u8.slice(segStart, segEnd));
         }
         i = segEnd;
       }
