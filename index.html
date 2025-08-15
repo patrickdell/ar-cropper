@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AR Cropper — Simple JPG</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#171a21">
+  <style>
+    :root { --bg:#0f1115; --card:#171a21; --ink:#e8eefc; --muted:#9fb0d1; --accent:#DA161F; --line:#252a36; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background: var(--bg); color: var(--ink); }
+    .wrap { max-width: 980px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p.sub { color: var(--muted); margin: 0 0 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(12, 1fr); align-items: end; }
+    label { color: var(--muted); font-size: 12px; }
+    input, button { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: #0c0f14; color: var(--ink); }
+    input:disabled { background: #0a0d12; color: #6c7a95; border-style: dashed; }
+    .preset-chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .chip { padding:6px 10px; border:1px solid var(--line); background:#10131a; color: var(--ink); border-radius:999px; cursor:pointer; font-size:12px; }
+    .chip.active { border-color: var(--accent); }
+    .result { font-size: 18px; font-weight: 700; letter-spacing: .2px; }
+    .muted { color: var(--muted); }
+    .err { border-color: var(--accent); }
+    .err-msg { color: var(--accent); font-size: 12px; min-height: 14px; margin-top: 4px; }
+    .actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .btn { cursor: pointer; background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+    .btn.secondary { background: #10131a; border:1px solid var(--line); color: var(--ink); }
+    .preview { background:#0a0d12; border:1px solid var(--line); border-radius:12px; display:flex; align-items:center; justify-content:center; aspect-ratio: 16 / 9; position:relative; }
+    canvas { max-width: 100%; height: auto; border-radius: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>AR Cropper — Simple JPG</h1>
+    <p class="sub">Choose a preset aspect ratio, enter width <em>or</em> height, upload a photo, and download a center‑cropped JPG at that ratio (optionally scaled to your computed resolution).</p>
+
+    <!-- Ratio + Calculator -->
+    <div class="card" style="margin-bottom:16px;">
+      <div class="grid">
+        <div style="grid-column: span 12;">
+          <label>Aspect Ratio</label>
+          <div class="preset-chips">
+            <button type="button" class="chip" data-ratio="3:2">3:2</button>
+            <button type="button" class="chip" data-ratio="4:3">4:3</button>
+            <button type="button" class="chip" data-ratio="1:1">1:1</button>
+            <button type="button" class="chip" data-ratio="4:5">4:5</button>
+            <button type="button" class="chip" data-ratio="2:3">2:3</button>
+          </div>
+        </div>
+        <div style="grid-column: span 3;">
+          <label>Width (px)</label>
+          <input id="width" type="number" />
+          <div id="wErr" class="err-msg"></div>
+        </div>
+        <div style="grid-column: span 3;">
+          <label>Height (px)</label>
+          <input id="height" type="number" />
+          <div id="hErr" class="err-msg"></div>
+        </div>
+        <div style="grid-column: span 12;">
+          <div id="result" class="result">—</div>
+          <div id="meta" class="muted"></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="resetBtn" class="btn secondary">Reset</button>
+        <label style="display:flex; align-items:center; gap:8px;"><input id="scaleOut" type="checkbox" /> Scale to computed resolution</label>
+      </div>
+    </div>
+
+    <!-- Uploader + Preview + Download -->
+    <div class="card">
+      <div class="grid">
+        <div style="grid-column: span 6;">
+          <label>Upload Image</label>
+          <input id="file" type="file" accept="image/*" />
+          <p class="muted" style="margin-top:6px;">JPEG/PNG/WebP supported. Preview shows the crop mask; download renders from original pixels.</p>
+        </div>
+        <div style="grid-column: span 6; display:flex; align-items:end; justify-content:flex-end; gap:8px;">
+          <button id="download" class="btn" disabled>Download JPG</button>
+          <button id="openTab" class="btn secondary" disabled>Open JPG in New Tab</button>
+        </div>
+        <div style="grid-column: span 12;">
+          <div class="preview">
+            <canvas id="previewCanvas" width="960" height="540"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Calculator state
+    const widthEl = document.getElementById('width');
+    const heightEl = document.getElementById('height');
+    const result = document.getElementById('result');
+    const meta = document.getElementById('meta');
+    const wErr = document.getElementById('wErr');
+    const hErr = document.getElementById('hErr');
+    const resetBtn = document.getElementById('resetBtn');
+    const scaleOut = document.getElementById('scaleOut');
+
+    let ratioStr = '3:2';
+    let activeField = null; // 'width' | 'height' | null
+
+    function ratioToNumber(str){
+      if (!str) return null;
+      if (str.includes(':')) { const [a,b] = str.split(':').map(Number); if (a>0 && b>0) return a/b; }
+      if (str.includes('/')) { const [a,b] = str.split('/').map(Number); if (a>0 && b>0) return a/b; }
+      const val = Number(str);
+      return val>0 ? val : null;
+    }
+
+    function setActiveRatio(str){
+      ratioStr = str;
+      document.querySelectorAll('.chip').forEach(b => b.classList.toggle('active', b.dataset.ratio === str));
+      liveCalc();
+      drawPreview();
+    }
+    document.querySelectorAll('.chip').forEach(btn => btn.addEventListener('click', () => setActiveRatio(btn.dataset.ratio)));
+
+    function setError(el, msgEl, msg){ el.classList.add('err'); msgEl.textContent = msg || ''; }
+    function clearError(el, msgEl){ el.classList.remove('err'); msgEl.textContent = ''; }
+
+    function lock(field){
+      activeField = field;
+      if (field === 'width') { heightEl.disabled = true; widthEl.disabled = false; }
+      else if (field === 'height') { widthEl.disabled = true; heightEl.disabled = false; }
+      else { widthEl.disabled = false; heightEl.disabled = false; }
+    }
+
+    function calc(){
+      clearError(widthEl, wErr); clearError(heightEl, hErr);
+      const r = ratioToNumber(ratioStr);
+      let W, H;
+      if (activeField === 'width') {
+        W = Number(widthEl.value);
+        if (!W) { setError(widthEl, wErr, 'Enter width'); result.textContent = '—'; meta.textContent=''; return null; }
+        H = Math.round(W / r);
+      } else if (activeField === 'height') {
+        H = Number(heightEl.value);
+        if (!H) { setError(heightEl, hErr, 'Enter height'); result.textContent = '—'; meta.textContent=''; return null; }
+        W = Math.round(H * r);
+      } else { result.textContent = '—'; meta.textContent=''; return null; }
+
+      result.textContent = `${W} × ${H} px`;
+      meta.textContent = `Aspect ratio: ${ratioStr}`;
+      return { W, H, r };
+    }
+
+    function liveCalc(){
+      const out = (activeField === 'width' && widthEl.value) || (activeField === 'height' && heightEl.value) ? calc() : null;
+      return out;
+    }
+
+    function handleInput(field){
+      return () => {
+        if (field === 'width') {
+          if (widthEl.value) { lock('width'); heightEl.value = ''; clearError(heightEl, hErr); }
+          else { lock(null); }
+        } else {
+          if (heightEl.value) { lock('height'); widthEl.value = ''; clearError(widthEl, wErr); }
+          else { lock(null); }
+        }
+        liveCalc();
+        drawPreview();
+      };
+    }
+
+    widthEl.addEventListener('focus', () => lock('width'));
+    heightEl.addEventListener('focus', () => lock('height'));
+    widthEl.addEventListener('input', handleInput('width'));
+    heightEl.addEventListener('input', handleInput('height'));
+
+    resetBtn.addEventListener('click', () => {
+      setActiveRatio('3:2');
+      widthEl.value = '';
+      heightEl.value = '';
+      lock(null);
+      result.textContent = '—';
+      meta.textContent = '';
+      drawPreview();
+    });
+
+    // --- Image handling
+    const fileInput = document.getElementById('file');
+    const downloadBtn = document.getElementById('download');
+    const openTabBtn = document.getElementById('openTab');
+    const previewCanvas = document.getElementById('previewCanvas');
+    const pctx = previewCanvas.getContext('2d');
+    let img = null;
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) { img = null; drawPreview(); downloadBtn.disabled = true; openTabBtn.disabled = true; return; }
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = () => { URL.revokeObjectURL(url); img = image; drawPreview(); downloadBtn.disabled = false; openTabBtn.disabled = false; };
+      image.onerror = () => { URL.revokeObjectURL(url); alert('Failed to load image.'); };
+      image.src = url;
+    });
+
+    function computeCropRect(imgW, imgH, r){
+      const imgR = imgW / imgH;
+      if (imgR > r) { // too wide → crop width
+        const cropW = Math.round(imgH * r);
+        const cropH = imgH;
+        const x = Math.round((imgW - cropW)/2);
+        return { x, y: 0, w: cropW, h: cropH };
+      } else { // too tall → crop height
+        const cropW = imgW;
+        const cropH = Math.round(imgW / r);
+        const y = Math.round((imgH - cropH)/2);
+        return { x: 0, y, w: cropW, h: cropH };
+      }
+    }
+
+    function drawPreview(){
+      // clear
+      pctx.clearRect(0,0,previewCanvas.width, previewCanvas.height);
+      pctx.fillStyle = '#0a0d12';
+      pctx.fillRect(0,0,previewCanvas.width, previewCanvas.height);
+      if (!img) return;
+
+      const r = ratioToNumber(ratioStr) || (img.width / img.height);
+      const crop = computeCropRect(img.width, img.height, r);
+
+      // draw fitted image
+      const scale = Math.min(previewCanvas.width / img.width, previewCanvas.height / img.height);
+      const dispW = img.width * scale;
+      const dispH = img.height * scale;
+      const dispX = (previewCanvas.width - dispW)/2;
+      const dispY = (previewCanvas.height - dispH)/2;
+      pctx.drawImage(img, dispX, dispY, dispW, dispH);
+
+      // overlay + clear crop
+      pctx.fillStyle = 'rgba(0,0,0,0.45)';
+      pctx.fillRect(0,0,previewCanvas.width, previewCanvas.height);
+      // transform crop to preview space
+      const cx = dispX + crop.x * scale;
+      const cy = dispY + crop.y * scale;
+      const cw = crop.w * scale;
+      const ch = crop.h * scale;
+      pctx.save();
+      pctx.globalCompositeOperation = 'destination-out';
+      pctx.fillRect(cx, cy, cw, ch);
+      pctx.restore();
+      pctx.strokeStyle = '#fff';
+      pctx.lineWidth = 2;
+      pctx.strokeRect(cx, cy, cw, ch);
+    }
+
+    function exportToBlob(cb){
+      if (!img) { alert('Upload an image first.'); return; }
+      const r = ratioToNumber(ratioStr) || (img.width / img.height);
+      const crop = computeCropRect(img.width, img.height, r);
+      let outW = crop.w, outH = crop.h;
+      const dims = liveCalc();
+      if (scaleOut.checked && dims) { outW = Math.max(1, dims.W); outH = Math.max(1, dims.H); }
+      const outCanvas = document.createElement('canvas');
+      outCanvas.width = outW; outCanvas.height = outH;
+      const ctx = outCanvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, outW, outH);
+      outCanvas.toBlob(cb, 'image/jpeg', 0.92);
+    }
+
+    downloadBtn.addEventListener('click', () => {
+      exportToBlob((blob) => {
+        if (!blob) { alert('Export failed.'); return; }
+        const url = URL.createObjectURL(blob);
+        try {
+          const a = document.createElement('a');
+          a.href = url; a.download = 'crop.jpg';
+          document.body.appendChild(a); a.click(); a.remove();
+        } catch(e) {
+          // Fallback
+          window.open(url, '_blank');
+        }
+        setTimeout(()=>URL.revokeObjectURL(url), 2000);
+      });
+    });
+
+    openTabBtn.addEventListener('click', () => {
+      exportToBlob((blob) => {
+        if (!blob) { alert('Export failed.'); return; }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.target = '_blank'; a.rel = 'noopener';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url), 2000);
+      });
+    });
+
+    // Minimal single-file PWA setup to enable iOS "Add to Home Screen" behavior on static hosts
+    (function(){
+      try {
+        const manifest = { name:'AR Cropper — Simple JPG', short_name:'AR Cropper', start_url:'.', display:'standalone', background_color:'#0f1115', theme_color:'#171a21', icons:[] };
+        const murl = URL.createObjectURL(new Blob([JSON.stringify(manifest)], {type:'application/json'}));
+        const link = document.createElement('link'); link.rel = 'manifest'; link.href = murl; document.head.appendChild(link);
+        if ('serviceWorker' in navigator && window.isSecureContext) {
+          const swCode = "self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>self.clients.claim());";
+          const swUrl = URL.createObjectURL(new Blob([swCode], {type:'text/javascript'}));
+          navigator.serviceWorker.register(swUrl).catch(()=>{});
+        }
+      } catch(e) {}
+    })();
+
+    // Init
+    setActiveRatio('3:2');
+  </script>
+</body>
+</html>
