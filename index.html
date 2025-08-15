@@ -38,6 +38,12 @@
     .modal-card { background: #0f131a; border:1px solid var(--line); border-radius: 14px; max-width: 90vw; max-height: 90vh; padding: 12px; }
     .modal-card img { max-width: 85vw; max-height: 80vh; display:block; border-radius: 10px; }
     .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top: 8px; }
+      .badge { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; font-size:12px; border:1px solid var(--line); background:#10131a; color:var(--muted); }
+    .badge.ok { color:#8ff0a4; border-color:#295a37; background:#102416; }
+    .badge.warn { color:#f0c28f; border-color:#5a4a29; background:#241e10; }
+    .badge .dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
+    .badge.ok .dot { background:#38c172; }
+    .badge.warn .dot { background:#f2c94c; }
   </style>
 </head>
 <body>
@@ -51,6 +57,10 @@
         <div style="grid-column: span 12;">
           <label>Upload Image</label>
           <input id="file" type="file" accept="image/*" />
+          <div class="row" style="margin-top:8px; align-items:center;">
+            <span id="iptcBadge" class="badge warn"><span class="dot"></span><span>No IPTC checked yet</span></span>
+            <button id="viewMetaBtn" class="btn secondary" disabled style="max-width:200px;">View Metadata</button>
+          </div>
           <p class="muted" style="margin-top:6px;">JPEG/PNG/WebP supported. Drag on the preview to pan. Use the zoom slider to change crop size.</p>
         </div>
       </div>
@@ -350,8 +360,148 @@
       downloadBtn.disabled = true; previewBtn.disabled = true; resetBtn.disabled = true; undoBtn.disabled = true; zoom.disabled = true;
     });
 
+    // ----- IPTC badge + viewer additions -----
+    const iptcBadge = document.getElementById('iptcBadge');
+    const viewMetaBtn = document.getElementById('viewMetaBtn');
+    const metaModal = document.getElementById('metaModal');
+    const metaContent = document.getElementById('metaContent');
+    const closeMeta = document.getElementById('closeMeta');
+
+    let originalBuffer = null; // ArrayBuffer of uploaded file
+    let parsedIPTC = null;
+
+    function formatIPTC(obj){
+      if (!obj || Object.keys(obj).length===0) return 'No IPTC metadata found.';
+      const lines = [];
+      const push = (k,v)=>{ if (v===undefined||v===null||v==='') return; if (Array.isArray(v)) { if (v.length) lines.push(`${k}: ${v.join(', ')}`); } else { lines.push(`${k}: ${v}`); } };
+      push('Headline', obj.Headline);
+      push('Title', obj.ObjectName);
+      push('Caption', obj.Caption);
+      push('Byline', obj.Byline);
+      push('Credit', obj.Credit);
+      push('Copyright', obj.Copyright);
+      push('Keywords', obj.Keywords);
+      push('DateCreated', obj.DateCreated);
+      push('City', obj.City);
+      push('Province/State', obj.ProvinceState);
+      push('Country', obj.Country);
+      return lines.join('
+');
+    }
+
+    function parseIPTCfromJPEG(buffer){
+      const dv = new DataView(buffer);
+      const u8 = new Uint8Array(buffer);
+      let i = 2;
+      if (u8[0] !== 0xFF || u8[1] !== 0xD8) return null;
+      while (i + 4 <= u8.length){
+        if (u8[i] !== 0xFF){ i++; continue; }
+        while (u8[i] === 0xFF) i++;
+        const marker = u8[i++];
+        if (marker === 0xDA || marker === 0xD9) break;
+        const len = dv.getUint16(i);
+        const segStart = i + 2;
+        const segEnd = i + len;
+        if (marker === 0xED){
+          const header = 'Photoshop 3.0 ';
+          let ok = true;
+          for (let k=0; k<header.length && segStart + k < segEnd; k++) if (u8[segStart+k] !== header.charCodeAt(k)) { ok=false; break; }
+          if (ok){
+            let p = segStart + header.length;
+            while (p + 8 <= segEnd){
+              if (u8[p++]!==0x38 || u8[p++]!==0x42 || u8[p++]!==0x49 || u8[p++]!==0x4D) break; // '8BIM'
+              const resId = (u8[p++]<<8)|u8[p++];
+              const nameLen = u8[p++]; p += nameLen; if ((1+nameLen)%2) p++;
+              if (p + 4 > segEnd) break;
+              const size = dv.getUint32(p); p += 4;
+              if (p + size > segEnd) break;
+              if (resId === 0x0404){ // IPTC IIM block
+                const out = {};
+                let q = p, end = p + size;
+                while (q + 5 <= end){
+                  if (u8[q++] !== 0x1C) continue; // tag marker
+                  const record = u8[q++];
+                  const dataset = u8[q++];
+                  let dataLen = (u8[q++]<<8) | u8[q++];
+                  if (dataLen & 0x8000) { const n=dataLen & 0x7FFF; dataLen=0; for (let t=0;t<n && q<end;t++){ dataLen=(dataLen<<8)|u8[q++]; } }
+                  const dataEnd = Math.min(q + dataLen, end);
+                  const bytes = u8.slice(q, dataEnd);
+                  const text = new TextDecoder('utf-8',{fatal:false}).decode(bytes);
+                  q = dataEnd;
+                  if (record===2){
+                    switch(dataset){
+                      case 5: out.ObjectName = text; break;
+                      case 105: out.Headline = text; break;
+                      case 120: out.Caption = text; break;
+                      case 80: out.Byline = text; break;
+                      case 110: out.Credit = text; break;
+                      case 116: out.Copyright = text; break;
+                      case 25: (out.Keywords||(out.Keywords=[])).push(text); break;
+                      case 55: out.DateCreated = text; break;
+                      case 90: out.City = text; break;
+                      case 95: out.ProvinceState = text; break;
+                      case 101: out.Country = text; break;
+                    }
+                  }
+                }
+                return out;
+              }
+              p += size + (size % 2);
+            }
+          }
+        }
+        i = segEnd;
+      }
+      return null;
+    }
+
+    // Badge + viewer wiring on upload (non-destructive to existing upload handler)
+    fileInput.addEventListener('change', async () => {
+      const f = fileInput.files && fileInput.files[0];
+      iptcBadge.classList.remove('ok'); iptcBadge.classList.add('warn');
+      iptcBadge.querySelector('span:last-child').textContent = 'Checking IPTC…';
+      viewMetaBtn.disabled = true; parsedIPTC = null; originalBuffer = null;
+      if (!f) { iptcBadge.querySelector('span:last-child').textContent = 'No file selected'; return; }
+      try {
+        originalBuffer = await f.arrayBuffer();
+        parsedIPTC = parseIPTCfromJPEG(originalBuffer);
+        if (parsedIPTC && Object.keys(parsedIPTC).length){
+          iptcBadge.classList.remove('warn'); iptcBadge.classList.add('ok');
+          iptcBadge.querySelector('span:last-child').textContent = 'IPTC Preserved';
+          viewMetaBtn.disabled = false;
+        } else {
+          iptcBadge.classList.remove('ok'); iptcBadge.classList.add('warn');
+          iptcBadge.querySelector('span:last-child').textContent = 'No IPTC Found';
+          viewMetaBtn.disabled = true;
+        }
+      } catch(e){
+        iptcBadge.classList.remove('ok'); iptcBadge.classList.add('warn');
+        iptcBadge.querySelector('span:last-child').textContent = 'Could not read metadata';
+      }
+    });
+
+    viewMetaBtn.addEventListener('click', ()=>{
+      metaContent.textContent = formatIPTC(parsedIPTC);
+      metaModal.classList.add('show');
+      metaModal.setAttribute('aria-hidden','false');
+    });
+    closeMeta.addEventListener('click', ()=>{
+      metaModal.classList.remove('show');
+      metaModal.setAttribute('aria-hidden','true');
+    });
+
     // initial paint
     draw();
   </script>
+  <!-- IPTC Metadata Modal -->
+  <div id="metaModal" class="modal" aria-hidden="true">
+    <div class="modal-card" style="max-width: 720px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px;">
+        <h3 style="margin:0; font-size:16px;">Image Metadata</h3>
+        <button id="closeMeta" class="btn secondary" style="max-width:120px;">Close</button>
+      </div>
+      <div id="metaContent" style="max-height:65vh; overflow:auto; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; line-height:1.5; color:var(--ink); background:#0b0e13; border:1px solid var(--line); border-radius:10px; padding:10px;"></div>
+    </div>
+  </div>
 </body>
 </html>
