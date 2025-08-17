@@ -43,7 +43,7 @@
 <body>
   <div class="wrap">
     <h1>QuickCrop</h1>
-    <p class="sub">Upload an image, choose an aspect ratio, pan the crop by dragging or arrow keys and zoom with mouse wheel or slider. Preview, then download the cropped JPEG. <strong>No resizing/scaling of output</strong> — export is exact cropped pixels. IPTC/XMP/ICC metadata is preserved from source JPEG (EXIF intentionally skipped to avoid orientation issues)..</p>
+    <p class="sub">Upload an image, choose an aspect ratio, pan the crop by dragging or arrow keys and zoom with mouse wheel or slider. Preview, then download the cropped JPEG. <strong>No resizing/scaling of output</strong> — export is exact cropped pixels. IPTC/XMP/ICC metadata is preserved from source JPEG (EXIF intentionally skipped to avoid orientation issues).</p>
 
     <!-- 1) Upload -->
     <div class="card" style="margin-bottom:16px;">
@@ -51,6 +51,12 @@
         <div style="grid-column: span 12;">
           <label>Upload Image</label>
           <input id="file" type="file" accept="image/*" />
+          <div class="row" style="margin-top:8px;align-items:center;gap:12px;">
+            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);">
+              <input id="keepExif" type="checkbox" /> Keep EXIF (strip Orientation)
+            </label>
+            <span style="font-size:12px;color:var(--muted);">Metadata: <span id="tagIPTC">IPTC —</span> · <span id="tagXMP">XMP —</span> · <span id="tagICC">ICC —</span></span>
+          </div>
           <p class="muted" style="margin-top:6px;">Drag on the preview to pan. Mouse wheel to zoom. Arrow keys to nudge. Shift+arrows for larger steps.</p>
         </div>
       </div>
@@ -67,6 +73,8 @@
             <button type="button" class="chip" data-ratio="1:1" disabled>1:1</button>
             <button type="button" class="chip" data-ratio="4:5" disabled>4:5</button>
             <button type="button" class="chip" data-ratio="2:3" disabled>2:3</button>
+            <button type="button" class="chip" data-ratio="16:9" disabled>16:9 - video</button>
+            <button type="button" class="chip" data-ratio="9:16" disabled>9:16 - video</button>
           </div>
         </div>
 
@@ -116,6 +124,10 @@
     const zoomOut = document.getElementById('zoomOut');
 
     const previewBtn = document.getElementById('previewBtn');
+    const keepExifChk = document.getElementById('keepExif');
+    const tagIPTC = document.getElementById('tagIPTC');
+    const tagXMP  = document.getElementById('tagXMP');
+    const tagICC  = document.getElementById('tagICC');
     const downloadBtn = document.getElementById('downloadBtn');
     const undoBtn = document.getElementById('undoBtn');
     const startOverBtn = document.getElementById('startOverBtn');
@@ -126,7 +138,8 @@
     const saveFromModal = document.getElementById('saveFromModal');
 
     // metadata capture to preserve IPTC/EXIF/XMP/ICC (JPEG only)
-    let originalMetaSegments = [];
+    let originalMeta = { xmp:null, icc:[], iptc:null, exif:null }; // raw segments
+    let originalMetaSegments = []; // ordered per current settings
 
     // state
     let img = null;
@@ -259,7 +272,12 @@
       const url = URL.createObjectURL(file);
       const image = new Image();
       image.onload = async () => { URL.revokeObjectURL(url); img=image; enableControls(); chips.forEach(c=>c.classList.remove('active')); chips[0].classList.add('active'); ratioStr = chips[0].dataset.ratio; resetCrop(); history.length=0; draw();
-        try { const buf = await file.arrayBuffer(); const det = detectMetadataKinds(buf); setMetaChip(det.hasIPTC, det.hasXMP, det.hasICC); originalMetaSegments = extractJpegMetaSegments(buf); } catch(e) { originalMetaSegments = []; setMetaChip(false,false,false); }
+        try {
+          const buf = await file.arrayBuffer();
+          const det = detectMetadataKinds(buf); setMetaChip(det.hasIPTC, det.hasXMP, det.hasICC);
+          originalMeta = extractJpegMetaObjects(buf);
+          originalMetaSegments = buildMetaSegmentArray(originalMeta, keepExifChk.checked);
+        } catch(e) { originalMeta = {xmp:null,icc:[],iptc:null,exif:null}; originalMetaSegments = []; setMetaChip(false,false,false); }
       };
       image.onerror = () => { URL.revokeObjectURL(url); alert('Failed to load image.'); };
       image.src = url;
@@ -272,6 +290,7 @@
       ratioStr = chips[0] ? chips[0].dataset.ratio : '3:2';
       zoom.value = 1; zoomOut.textContent = '1.00×';
       downloadBtn.disabled = true; previewBtn.disabled = true; startOverBtn.disabled = true; undoBtn.disabled = true; zoom.disabled = true;
+      setMetaChip(false,false,false);
     }
 
     // export helpers
@@ -284,68 +303,101 @@
       return outCanvas;
     }
 
-    // ---- JPEG metadata handling (focus on IPTC + XMP only to avoid Orientation issues) ----
-    function extractJpegMetaSegments(buffer){
-      // Keep APP13 (IPTC/Photoshop), APP1 XMP, and APP2 ICC profile.
-      // Skip EXIF (APP1) to avoid Orientation conflicts.
+    // ---- JPEG metadata handling (IPTC + XMP + ICC + optional EXIF) ----
+    function teBytes(s){ return new TextEncoder().encode(s); }
+    function bytesStartsWith(buf, start, end, sig){ if (start + sig.length > end) return false; for (let i=0;i<sig.length;i++){ if (buf[start+i] !== sig[i]) return false; } return true; }
+
+    function extractJpegMetaObjects(buffer){
       const view = new DataView(buffer);
       const u8 = new Uint8Array(buffer);
-      const segs = [];
-      if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return segs; // not JPEG
-      let i = 2; // after SOI
+      const XMP_SIG = Uint8Array.from([...teBytes('http://ns.adobe.com/xap/1.0/'), 0x00]);
+      const ICC_SIG = Uint8Array.from([...teBytes('ICC_PROFILE'), 0x00]);
+      const PS_SIG  = Uint8Array.from([...teBytes('Photoshop 3.0'), 0x00]);
+      const EXIF_SIG= Uint8Array.from([...teBytes('Exif'), 0x00, 0x00]);
+      const out = { xmp:null, icc:[], iptc:null, exif:null };
+      if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return out;
+      let i = 2;
       while (i + 4 <= u8.length){
-        if (u8[i] !== 0xFF) { i++; continue; }
+        if (u8[i] !== 0xFF){ i++; continue; }
         while (i < u8.length && u8[i] === 0xFF) i++;
         if (i >= u8.length) break;
         const marker = u8[i++];
-        if (marker === 0xDA /*SOS*/ || marker === 0xD9 /*EOI*/) break;
+        if (marker === 0xDA || marker === 0xD9) break;
         if (i + 2 > u8.length) break;
         const len = view.getUint16(i, false);
-        const segStart = i - 2; // 0xFF at segStart
-        const segEnd = i + len;
+        const segStart = i - 2; const segDataStart = i + 2; const segEnd = i + len;
         if (segEnd > u8.length) break;
-        if ((marker & 0xF0) === 0xE0){
-          if (marker === 0xED){ // APP13 (IPTC/Photoshop)
-            const sig = "Photoshop 3.0 ";
-            let ok = true; for (let k=0;k<sig.length && (i+2+k)<segEnd;k++){ if (u8[i+2+k] !== sig.charCodeAt(k)) { ok=false; break; } }
-            if (ok) segs.push(u8.slice(segStart, segEnd));
-          } else if (marker === 0xE1){ // APP1 (EXIF or XMP)
-            const xmpSig = "http://ns.adobe.com/xap/1.0/ ";
-            let isXmp = true; for (let k=0;k<xmpSig.length && (i+2+k)<segEnd;k++){ if (u8[i+2+k] !== xmpSig.charCodeAt(k)) { isXmp=false; break; } }
-            if (isXmp) segs.push(u8.slice(segStart, segEnd)); // keep XMP
-            // else: EXIF — intentionally skipped
-          } else if (marker === 0xE2){ // APP2 (ICC profile)
-            const iccSig = "ICC_PROFILE ";
-            let ok = true; for (let k=0;k<iccSig.length && (i+2+k)<segEnd;k++){ if (u8[i+2+k] !== iccSig.charCodeAt(k)) { ok=false; break; } }
-            if (ok) segs.push(u8.slice(segStart, segEnd));
+        if (marker === 0xE1){
+          if (bytesStartsWith(u8, segDataStart, segEnd, XMP_SIG) && !out.xmp) out.xmp = u8.slice(segStart, segEnd);
+          else if (bytesStartsWith(u8, segDataStart, segEnd, EXIF_SIG) && !out.exif) out.exif = u8.slice(segStart, segEnd);
+        } else if (marker === 0xE2){
+          if (bytesStartsWith(u8, segDataStart, segEnd, ICC_SIG)){
+            const seq   = u8[segDataStart + ICC_SIG.length] || 1;
+            const total = u8[segDataStart + ICC_SIG.length + 1] || 1;
+            out.icc.push({ seq, total, bytes: u8.slice(segStart, segEnd) });
           }
+        } else if (marker === 0xED){
+          if (bytesStartsWith(u8, segDataStart, segEnd, PS_SIG) && !out.iptc) out.iptc = u8.slice(segStart, segEnd);
         }
         i = segEnd;
       }
+      out.icc.sort((a,b)=>a.seq-b.seq);
+      return out;
+    }
+
+    function buildMetaSegmentArray(metaObj, keepExif){
+      const segs = [];
+      if (keepExif && metaObj.exif){
+        const stripped = stripExifOrientation(metaObj.exif);
+        segs.push(stripped || metaObj.exif);
+      }
+      if (metaObj.xmp) segs.push(metaObj.xmp);
+      if (metaObj.icc && metaObj.icc.length){ for (const c of metaObj.icc) segs.push(c.bytes); }
+      if (metaObj.iptc) segs.push(metaObj.iptc);
       return segs;
     }
 
+    function stripExifOrientation(app1Exif){
+      try{
+        let off = 4; // after FF E1 len
+        if (!(app1Exif[off]===0x45 && app1Exif[off+1]===0x78 && app1Exif[off+2]===0x69 && app1Exif[off+3]===0x66)) return app1Exif;
+        off += 6; // skip 'Exif  '
+        const dv = new DataView(app1Exif.buffer, app1Exif.byteOffset);
+        const little = (dv.getUint16(off, false) === 0x4949); // II or MM
+        const ifd0Offset = dv.getUint32(off+4, little);
+        if (ifd0Offset === 0) return app1Exif;
+        const ifd0 = off + ifd0Offset;
+        const count = dv.getUint16(ifd0, little);
+        for (let n=0;n<count;n++){
+          const e = ifd0 + 2 + n*12;
+          const tag = dv.getUint16(e, little);
+          if (tag === 0x0112){ // Orientation
+            const type = dv.getUint16(e+2, little); const num  = dv.getUint32(e+4, little);
+            if (type === 3 && num >= 1){
+              const valueOff = e+8; const view8 = new Uint8Array(app1Exif.buffer, app1Exif.byteOffset);
+              if (little){ view8[valueOff] = 1; view8[valueOff+1] = 0; } else { view8[valueOff] = 0; view8[valueOff+1] = 1; }
+              break;
+            }
+          }
+        }
+        return app1Exif;
+      }catch(e){ return app1Exif; }
+    }
+
     async function attachMetadataToJpegBlob(blob, metaSegments){
-      // Insert our metadata after any existing APP0 (JFIF) in the encoded JPEG
       if (!metaSegments || metaSegments.length === 0) return blob;
       const outBuf = await blob.arrayBuffer();
       const u8 = new Uint8Array(outBuf);
       if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return blob;
-      let insertPos = 2; // after SOI
-      // If canvas encoder emitted APP0 JFIF, skip it so JFIF stays first
-      if (u8[2] === 0xFF && u8[3] === 0xE0 && u8.length >= 6){
-        const len = (u8[4] << 8) | u8[5];
-        if (6 + len <= u8.length) insertPos = 2 + 2 + len; // SOI + (0xFF E0 + len + data)
+      let insertPos = 2; let p = 2;
+      while (p + 4 < u8.length && u8[p] === 0xFF && u8[p+1] === 0xE0){
+        const len = (u8[p+2] << 8) | u8[p+3]; const next = p + 2 + len; if (next <= u8.length){ insertPos = next; p = next; } else { break; }
       }
       const metaLen = metaSegments.reduce((sum, seg) => sum + seg.length, 0);
       const merged = new Uint8Array(u8.length + metaLen);
-      // copy: before insert
       merged.set(u8.subarray(0, insertPos), 0);
-      // copy: meta
-      let off = insertPos;
-      for (const seg of metaSegments){ merged.set(seg, off); off += seg.length; }
-      // copy: rest
-      merged.set(u8.subarray(insertPos), off);
+      let off2 = insertPos; for (const seg of metaSegments){ merged.set(seg, off2); off2 += seg.length; }
+      merged.set(u8.subarray(insertPos), off2);
       return new Blob([merged], { type: 'image/jpeg' });
     }
 
@@ -357,6 +409,7 @@
         if (!c) return;
         c.toBlob(async (blob)=>{
           if (!blob) return;
+          originalMetaSegments = buildMetaSegmentArray(originalMeta, keepExifChk.checked);
           const withMeta = await attachMetadataToJpegBlob(blob, originalMetaSegments);
           const url = URL.createObjectURL(withMeta);
           if (currentPreviewURL) URL.revokeObjectURL(currentPreviewURL);
@@ -366,7 +419,11 @@
       });
     }
 
-    // Preview modal
+    function setMetaChip(iptc,xmp,icc){
+      tagIPTC.textContent = `IPTC ${iptc ? '✓' : '—'}`;
+      tagXMP.textContent  = `XMP ${xmp ? '✓' : '—'}`;
+      tagICC.textContent  = `ICC ${icc ? '✓' : '—'}`;
+    }
     function openPreview(){
       previewOpen = true;
       schedulePreviewUpdate();
@@ -409,6 +466,11 @@
     });
 
     startOverBtn.addEventListener('click', ()=>{ clearToStart(); });
+
+    // toggle rebuilds the metadata ordering for next preview/download
+    keepExifChk.addEventListener('change', ()=>{
+      originalMetaSegments = buildMetaSegmentArray(originalMeta, keepExifChk.checked);
+    });
 
     // initial paint
     draw();
