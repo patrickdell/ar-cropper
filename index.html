@@ -1,241 +1,503 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>QuickCrop</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#171a21">
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 20px;
-      text-align: center;
-      background: #f8f8f8;
-    }
-    h1 {
-      font-size: 2em;
-      margin-bottom: 10px;
-    }
-    p {
-      margin: 10px 0 20px;
-      color: #333;
-    }
-    #uploadArea {
-      border: 2px dashed #aaa;
-      padding: 20px;
-      margin: 20px auto;
-      background: #fff;
-      width: 80%;
-      max-width: 800px;
-      cursor: pointer;
-      position: relative;
-    }
-    #uploadArea.dragover {
-      border-color: #333;
-      background: #f0f0f0;
-    }
-    canvas {
-      max-width: 100%;
-      border: 1px solid #ccc;
-      margin-top: 20px;
-      cursor: grab;
-    }
-    .buttons {
-      margin: 20px 0;
-    }
-    .buttons button {
-      margin: 5px;
-      padding: 8px 14px;
-      cursor: pointer;
-      border: none;
-      border-radius: 4px;
-      background: #007bff;
-      color: #fff;
-      font-size: 14px;
-    }
-    .buttons button:hover {
-      background: #0056b3;
-    }
-    #preview {
-      margin-top: 20px;
-      max-width: 80%;
-      border: 1px solid #ddd;
-      display: none;
-    }
-    #slider {
-      width: 200px;
-      margin-top: 15px;
-    }
-    #metadataBadge {
-      display: inline-block;
-      background: #eee;
-      padding: 5px 10px;
-      border-radius: 12px;
-      font-size: 12px;
-      margin-top: 10px;
-    }
+    :root { --bg:#0f1115; --card:#171a21; --ink:#e8eefc; --muted:#9fb0d1; --accent:#DA161F; --line:#252a36; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background: var(--bg); color: var(--ink); }
+    .wrap { max-width: 980px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p.sub { color: var(--muted); margin: 0 0 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(12, 1fr); align-items: end; }
+    label { color: var(--muted); font-size: 12px; }
+    button, input[type="file"], input[type="range"] { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: #0c0f14; color: var(--ink); }
+    .preset-chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    .chip { padding:6px 10px; border:1px solid var(--line); background:#10131a; color: var(--ink); border-radius:999px; cursor:pointer; font-size:12px; }
+    .chip.active { border-color: var(--accent); }
+    .chip:disabled { opacity: .5; cursor: not-allowed; }
+    .btn { cursor: pointer; background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+    .btn.secondary { background: #10131a; border:1px solid var(--line); color: var(--ink); }
+    .btn.ghost { background: transparent; border:1px dashed var(--line); color: var(--ink); }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .preview { background:#0a0d12; border:1px solid var(--line); border-radius:12px; display:flex; align-items:center; justify-content:center; aspect-ratio: 16 / 9; position:relative; }
+    canvas { max-width: 100%; height: auto; border-radius: 12px; cursor: grab; }
+    canvas.dragging { cursor: grabbing; }
+    .muted { color: var(--muted); }
+    .zoomrow { display:flex; align-items:center; gap:10px; }
+    .zoomrow output { min-width: 48px; text-align: right; color: var(--muted); }
+    /* modal */
+    .modal { position: fixed; inset: 0; display:none; align-items:center; justify-content:center; background: rgba(0,0,0,0.6); z-index: 1000; }
+    .modal.show { display:flex; }
+    .modal-card { background: #0f131a; border:1px solid var(--line); border-radius: 14px; max-width: 90vw; max-height: 90vh; padding: 12px; }
+    .modal-card img { max-width: 85vw; max-height: 80vh; display:block; border-radius: 10px; }
+    .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top: 8px; }
+      /* drag & drop hint */
+    .preview.drop { outline: 2px dashed var(--accent); outline-offset: 6px; }
   </style>
 </head>
 <body>
-  <h1>QuickCrop</h1>
-  <p>
-    Upload or drag and drop an image on the preview area, choose an aspect ratio, 
-    pan the crop by dragging or arrow keys and zoom with mouse wheel or slider. 
-    Preview, then download the cropped JPEG. No resizing/scaling of output.
-  </p>
+  <div class="wrap">
+    <h1>QuickCrop</h1>
+    <p class="sub">Upload an image, choose an aspect ratio, pan the crop by dragging or arrow keys and zoom with mouse wheel or slider. Preview, then download the cropped JPEG. <strong>No resizing/scaling of output</strong> — export is exact cropped pixels. IPTC/XMP/ICC metadata is preserved from source JPEG (EXIF intentionally skipped to avoid orientation issues).</p>
 
-  <div id="uploadArea">
-    <input type="file" id="upload" accept="image/*" style="display:none">
-    <p>Click or drag an image here to upload</p>
+    <!-- 1) Upload -->
+    <div class="card" style="margin-bottom:16px;">
+      <div class="grid">
+        <div style="grid-column: span 12;">
+          <label>Upload Image</label>
+          <input id="file" type="file" accept="image/*" />
+          <div class="row" style="margin-top:8px;align-items:center;gap:12px;">
+            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);">
+              <input id="keepExif" type="checkbox" /> Keep EXIF (strip Orientation)
+            </label>
+            <span style="font-size:12px;color:var(--muted);">Metadata: <span id="tagIPTC">IPTC —</span> · <span id="tagXMP">XMP —</span> · <span id="tagICC">ICC —</span></span>
+          </div>
+          <p class="muted" style="margin-top:6px;">Drag on the preview to pan. Mouse wheel to zoom. Arrow keys to nudge. Shift+arrows for larger steps.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2) Preset + Controls + Preview -->
+    <div class="card">
+      <div class="grid">
+        <div style="grid-column: span 12;">
+          <label>Aspect Ratio</label>
+          <div class="preset-chips">
+            <button type="button" class="chip" data-ratio="3:2" disabled>3:2</button>
+            <button type="button" class="chip" data-ratio="4:3" disabled>4:3</button>
+            <button type="button" class="chip" data-ratio="1:1" disabled>1:1</button>
+            <button type="button" class="chip" data-ratio="4:5" disabled>4:5</button>
+            <button type="button" class="chip" data-ratio="2:3" disabled>2:3</button>
+            <button type="button" class="chip" data-ratio="16:9" disabled>16:9 - video</button>
+            <button type="button" class="chip" data-ratio="9:16" disabled>9:16 - video</button>
+          </div>
+        </div>
+
+        <div style="grid-column: span 12;">
+          <div class="preview" id="dropZone">
+            <canvas id="previewCanvas" width="960" height="540"></canvas>
+          </div>
+          <div class="zoomrow" style="margin-top:10px;">
+            <label for="zoom" style="min-width:60px;">Zoom</label>
+            <input id="zoom" type="range" min="1" max="5" step="0.01" value="1" disabled />
+            <output id="zoomOut">1.00×</output>
+          </div>
+        </div>
+
+        <div style="grid-column: span 12; display:flex; justify-content:space-between; gap:8px;">
+          <div class="row">
+            <button id="undoBtn" class="btn secondary" disabled>Undo</button>
+            <button id="startOverBtn" class="btn ghost" disabled>Start Over</button>
+          </div>
+          <div class="row">
+            <button id="previewBtn" class="btn secondary" disabled>Preview</button>
+            <button id="downloadBtn" class="btn" disabled>Download Cropped JPG</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <canvas id="canvas"></canvas>
-
-  <div class="buttons" id="ratioButtons">
-    <button data-ratio="3/2">3:2</button>
-    <button data-ratio="4/3">4:3</button>
-    <button data-ratio="1/1">1:1</button>
-    <button data-ratio="4/5">4:5</button>
-    <button data-ratio="2/3">2:3</button>
-    <button data-ratio="16/9">16:9 - video</button>
-    <button data-ratio="9/16">9:16 - video</button>
+  <!-- Modal Preview -->
+  <div id="modal" class="modal" aria-hidden="true">
+    <div class="modal-card">
+      <img id="modalImg" alt="Cropped preview" />
+      <div class="modal-actions">
+        <button id="closeModal" class="btn secondary">Close</button>
+        <a id="saveFromModal" class="btn" download="crop.jpg">Download JPG</a>
+      </div>
+    </div>
   </div>
 
-  <div class="buttons">
-    <button id="previewBtn">Preview</button>
-    <button id="downloadBtn">Download</button>
-    <button id="undoBtn">Undo</button>
-    <button id="resetBtn">Start Over</button>
-  </div>
-
-  <input type="range" id="slider" min="1" max="3" step="0.01" value="1">
-  <div id="metadataBadge">No image loaded</div>
-
-  <img id="preview" alt="Preview">
-
-  <script src="https://cdn.jsdelivr.net/npm/piexifjs"></script>
   <script>
-    const uploadArea = document.getElementById('uploadArea');
-    const uploadInput = document.getElementById('upload');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const slider = document.getElementById('slider');
-    const previewImg = document.getElementById('preview');
-    const metadataBadge = document.getElementById('metadataBadge');
+    // UI refs
+    const fileInput = document.getElementById('file');
+    const chips = Array.from(document.querySelectorAll('.chip'));
+    const previewCanvas = document.getElementById('previewCanvas');
+    const dropZone = document.getElementById('dropZone');
+    const ctx = previewCanvas.getContext('2d');
+    const zoom = document.getElementById('zoom');
+    const zoomOut = document.getElementById('zoomOut');
 
-    let img = new Image();
-    let exifData = null;
-    let crop = {x: 0, y: 0, scale: 1, ratio: 1};
-    let dragging = false;
-    let startX, startY;
+    const previewBtn = document.getElementById('previewBtn');
+    const keepExifChk = document.getElementById('keepExif');
+    const tagIPTC = document.getElementById('tagIPTC');
+    const tagXMP  = document.getElementById('tagXMP');
+    const tagICC  = document.getElementById('tagICC');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const undoBtn = document.getElementById('undoBtn');
+    const startOverBtn = document.getElementById('startOverBtn');
 
-    function loadImage(file) {
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        const dataURL = e.target.result;
-        const exif = piexif.load(dataURL);
-        exifData = exif;
-        updateMetadataBadge(exif);
+    const modal = document.getElementById('modal');
+    const modalImg = document.getElementById('modalImg');
+    const closeModal = document.getElementById('closeModal');
+    const saveFromModal = document.getElementById('saveFromModal');
 
-        img.onload = function() {
-          canvas.width = img.width;
-          canvas.height = img.height;
-          crop.x = 0;
-          crop.y = 0;
-          crop.scale = 1;
-          drawCrop();
-        };
-        img.src = dataURL;
+    // metadata capture to preserve IPTC/EXIF/XMP/ICC (JPEG only)
+    let originalMeta = { xmp:null, icc:[], iptc:null, exif:null }; // raw segments
+    let originalMetaSegments = []; // ordered per current settings
+
+    // state
+    let img = null;
+    let ratioStr = '3:2'; // default, but disabled until upload
+    let disp = { scale: 1, x: 0, y: 0 }; // image->canvas transform
+
+    // crop state in image coords
+    let cropCenter = { x: 0, y: 0 };
+    let baseCrop = { w: 0, h: 0 }; // largest crop that fits at current AR
+
+    // preview modal live-update state
+    let previewOpen = false;
+    let previewRAF = null;
+    let currentPreviewURL = null;
+
+    // simple history for Undo
+    const history = [];
+    function pushHistory(){ if(!img) return; const state = { ratioStr, cropCenter: { ...cropCenter }, zoom: Number(zoom.value) }; history.push(state); undoBtn.disabled = history.length === 0; }
+    function popHistory(){ const prev = history.pop(); undoBtn.disabled = history.length === 0; return prev || null; }
+
+    // helpers
+    function ratioToNumber(str){ const [a,b] = str.split(':').map(Number); return a>0 && b>0 ? a/b : 1; }
+    function computeBaseCrop(imgW, imgH, r){ const ir = imgW/imgH; return (ir>r) ? { w: Math.round(imgH*r), h: imgH } : { w: imgW, h: Math.round(imgW/r) }; }
+    function clampCropCenter(cx, cy, cw, ch, imgW, imgH){ const hw=cw/2, hh=ch/2; return { x: Math.max(hw, Math.min(imgW-hw, cx)), y: Math.max(hh, Math.min(imgH-hh, cy)) }; }
+
+    function getCurrentCrop(){
+      if (!img) return null;
+      const r = ratioToNumber(ratioStr);
+      baseCrop = computeBaseCrop(img.width, img.height, r);
+      const z = Math.max(1, Number(zoom.value) || 1);
+      const cw = Math.max(1, Math.round(baseCrop.w / z));
+      const ch = Math.max(1, Math.round(baseCrop.h / z));
+      const c = clampCropCenter(cropCenter.x, cropCenter.y, cw, ch, img.width, img.height);
+      return { x: Math.round(c.x - cw/2), y: Math.round(c.y - ch/2), w: cw, h: ch };
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,previewCanvas.width, previewCanvas.height);
+      ctx.fillStyle = '#0a0d12'; ctx.fillRect(0,0,previewCanvas.width, previewCanvas.height);
+      if (!img) return;
+      // fit image into canvas
+      disp.scale = Math.min(previewCanvas.width/img.width, previewCanvas.height/img.height);
+      const dispW = img.width*disp.scale, dispH = img.height*disp.scale;
+      disp.x = (previewCanvas.width - dispW)/2; disp.y = (previewCanvas.height - dispH)/2;
+      ctx.drawImage(img, disp.x, disp.y, dispW, dispH);
+      // overlay mask
+      ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0,0,previewCanvas.width,previewCanvas.height);
+      const crop = getCurrentCrop(); if (!crop) return;
+      const cx = disp.x + crop.x*disp.scale, cy = disp.y + crop.y*disp.scale;
+      const cw = crop.w*disp.scale, ch = crop.h*disp.scale;
+      ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.fillRect(cx, cy, cw, ch); ctx.restore();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(cx, cy, cw, ch);
+      if (previewOpen) schedulePreviewUpdate();
+    }
+
+    function enableControls(){ chips.forEach(c=>c.disabled=false); zoom.disabled=false; downloadBtn.disabled=false; previewBtn.disabled=false; startOverBtn.disabled=false; }
+    function resetCrop(){ if (!img) return; cropCenter = { x: img.width/2, y: img.height/2 }; zoom.value = 1; zoomOut.textContent = '1.00×'; }
+
+    // interactions — aspect ratio
+    chips.forEach(btn => btn.addEventListener('click', () => { pushHistory(); ratioStr = btn.dataset.ratio; chips.forEach(c=>c.classList.toggle('active', c===btn)); resetCrop(); draw(); }));
+
+    // interactions — slider zoom
+    zoom.addEventListener('input', () => { pushHistory(); zoomOut.textContent = `${Number(zoom.value).toFixed(2)}×`; draw(); });
+
+    // interactions — drag to pan
+    let dragging=false, dragOffset={x:0,y:0};
+    previewCanvas.addEventListener('mousedown', (e)=>{
+      if(!img) return; dragging=true; previewCanvas.classList.add('dragging');
+      const rect=previewCanvas.getBoundingClientRect(); const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+      const ix=(mx - disp.x)/disp.scale, iy=(my - disp.y)/disp.scale; const crop=getCurrentCrop(); if(!crop) return;
+      dragOffset.x = ix - (crop.x + crop.w/2); dragOffset.y = iy - (crop.y + crop.h/2);
+      pushHistory();
+    });
+    window.addEventListener('mouseup',()=>{dragging=false; previewCanvas.classList.remove('dragging');});
+    window.addEventListener('mousemove',(e)=>{
+      if(!dragging||!img) return; const rect=previewCanvas.getBoundingClientRect();
+      const ix=(e.clientX-rect.left - disp.x)/disp.scale, iy=(e.clientY-rect.top - disp.y)/disp.scale; const crop=getCurrentCrop(); if(!crop) return;
+      const targetCenterX = ix - dragOffset.x, targetCenterY = iy - dragOffset.y;
+      const clamped = clampCropCenter(targetCenterX, targetCenterY, crop.w, crop.h, img.width, img.height);
+      cropCenter.x = clamped.x; cropCenter.y = clamped.y; draw();
+    });
+
+    // interactions — mouse wheel / touchpad zoom (center on cursor)
+    previewCanvas.addEventListener('wheel', (e)=>{
+      if(!img) return; e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      const oldZ = Number(zoom.value);
+      let newZ = Math.min(5, Math.max(1, oldZ * factor));
+      if (Math.abs(newZ - oldZ) < 1e-3) return;
+      const rect=previewCanvas.getBoundingClientRect(); const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+      const ix=(mx - disp.x)/disp.scale, iy=(my - disp.y)/disp.scale;
+      const crop=getCurrentCrop(); if(!crop) return;
+      const fx = (ix - crop.x) / crop.w; const fy = (iy - crop.y) / crop.h;
+      // apply zoom
+      pushHistory();
+      zoom.value = newZ; zoomOut.textContent = `${Number(zoom.value).toFixed(2)}×`;
+      const after = getCurrentCrop();
+      let x0p = ix - fx * after.w; let y0p = iy - fy * after.h;
+      const centerX = x0p + after.w/2; const centerY = y0p + after.h/2;
+      const clamped = clampCropCenter(centerX, centerY, after.w, after.h, img.width, img.height);
+      cropCenter.x = clamped.x; cropCenter.y = clamped.y;
+      draw();
+    }, { passive:false });
+
+    // interactions — keyboard pan + zoom
+    window.addEventListener('keydown', (e)=>{
+      if(!img) return;
+      const activeTag = document.activeElement && document.activeElement.tagName.toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea') return;
+      const crop = getCurrentCrop(); if(!crop) return;
+      const baseStep = Math.max(1, Math.round(Math.min(crop.w, crop.h) * 0.02));
+      const step = e.shiftKey ? baseStep * 3 : baseStep;
+      let handled = true;
+      switch(e.key){
+        case 'ArrowLeft': pushHistory(); cropCenter.x = Math.max(crop.w/2, cropCenter.x - step); break;
+        case 'ArrowRight': pushHistory(); cropCenter.x = Math.min(img.width - crop.w/2, cropCenter.x + step); break;
+        case 'ArrowUp': pushHistory(); cropCenter.y = Math.max(crop.h/2, cropCenter.y - step); break;
+        case 'ArrowDown': pushHistory(); cropCenter.y = Math.min(img.height - crop.h/2, cropCenter.y + step); break;
+        case '+': case '=': pushHistory(); zoom.value = Math.min(5, Number(zoom.value)*1.1); zoomOut.textContent = `${Number(zoom.value).toFixed(2)}×`; break;
+        case '-': case '_': pushHistory(); zoom.value = Math.max(1, Number(zoom.value)/1.1); zoomOut.textContent = `${Number(zoom.value).toFixed(2)}×`; break;
+        default: handled = false;
+      }
+      if (handled){ e.preventDefault(); draw(); }
+    });
+
+    // file handling (input + drag&drop)
+    async function loadFile(file){
+      if (!file) { clearToStart(); return; }
+      const url = URL.createObjectURL(file);
+      const image = new Image();
+      image.onload = async () => {
+        URL.revokeObjectURL(url);
+        img=image; enableControls(); chips.forEach(c=>c.classList.remove('active')); chips[0].classList.add('active');
+        ratioStr = chips[0].dataset.ratio; resetCrop(); history.length=0; draw();
+        try {
+          const buf = await file.arrayBuffer();
+          const det = detectMetadataKinds(buf); setMetaChip(det.hasIPTC, det.hasXMP, det.hasICC);
+          originalMeta = extractJpegMetaObjects(buf);
+          originalMetaSegments = buildMetaSegmentArray(originalMeta, keepExifChk.checked);
+        } catch(e) { originalMeta = {xmp:null,icc:[],iptc:null,exif:null}; originalMetaSegments = []; setMetaChip(false,false,false); }
       };
-      reader.readAsDataURL(file);
+      image.onerror = () => { URL.revokeObjectURL(url); alert('Failed to load image.'); };
+      image.src = url;
     }
 
-    function updateMetadataBadge(exif) {
-      const make = exif['0th'][piexif.ImageIFD.Make] || 'Unknown';
-      const model = exif['0th'][piexif.ImageIFD.Model] || '';
-      metadataBadge.textContent = `Metadata: ${make} ${model}`;
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0];
+      loadFile(file);
+    });
+
+    // drag & drop support on the preview card
+    ;['dragenter','dragover'].forEach(evt => dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.add('drop'); }));
+    ;['dragleave','dragend'].forEach(evt => dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('drop'); }));
+    dropZone.addEventListener('drop', (e)=>{
+      e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('drop');
+      const dt = e.dataTransfer; if (!dt) return; const file = (dt.files && dt.files[0]) || null;
+      if (!file) return; if (!file.type || !file.type.startsWith('image/')) { alert('Please drop an image file.'); return; }
+      loadFile(file);
+    });
+
+    // prevent the browser from opening the file when dropped outside
+    window.addEventListener('dragover', e=>e.preventDefault());
+    window.addEventListener('drop', e=>e.preventDefault());
+
+    function clearToStart(){
+      img=null; history.length=0; ctx.clearRect(0,0,previewCanvas.width,previewCanvas.height);
+      chips.forEach(c=>{ c.disabled=true; c.classList.remove('active'); });
+      if (chips[0]) chips[0].classList.add('active');
+      ratioStr = chips[0] ? chips[0].dataset.ratio : '3:2';
+      zoom.value = 1; zoomOut.textContent = '1.00×';
+      downloadBtn.disabled = true; previewBtn.disabled = true; startOverBtn.disabled = true; undoBtn.disabled = true; zoom.disabled = true;
+      setMetaChip(false,false,false);
     }
 
-    function drawCrop() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const cropWidth = canvas.width / crop.scale;
-      const cropHeight = cropWidth / crop.ratio;
-      ctx.drawImage(img, crop.x, crop.y, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+    // export helpers
+    function renderCroppedToCanvas(){
+      if (!img) return null;
+      const crop = getCurrentCrop(); if (!crop) return null;
+      const outCanvas = document.createElement('canvas'); outCanvas.width = crop.w; outCanvas.height = crop.h;
+      const octx = outCanvas.getContext('2d'); octx.imageSmoothingEnabled = true; octx.imageSmoothingQuality = 'high';
+      octx.drawImage(img, crop.x, crop.y, crop.w, crop.h, 0, 0, crop.w, crop.h);
+      return outCanvas;
     }
 
-    document.getElementById('ratioButtons').addEventListener('click', e => {
-      if (e.target.tagName === 'BUTTON') {
-        crop.ratio = eval(e.target.getAttribute('data-ratio'));
-        drawCrop();
+    // ---- JPEG metadata handling (IPTC + XMP + ICC + optional EXIF) ----
+    function teBytes(s){ return new TextEncoder().encode(s); }
+    function bytesStartsWith(buf, start, end, sig){ if (start + sig.length > end) return false; for (let i=0;i<sig.length;i++){ if (buf[start+i] !== sig[i]) return false; } return true; }
+
+    function extractJpegMetaObjects(buffer){
+      const view = new DataView(buffer);
+      const u8 = new Uint8Array(buffer);
+      const XMP_SIG = Uint8Array.from([...teBytes('http://ns.adobe.com/xap/1.0/'), 0x00]);
+      const ICC_SIG = Uint8Array.from([...teBytes('ICC_PROFILE'), 0x00]);
+      const PS_SIG  = Uint8Array.from([...teBytes('Photoshop 3.0'), 0x00]);
+      const EXIF_SIG= Uint8Array.from([...teBytes('Exif'), 0x00, 0x00]);
+      const out = { xmp:null, icc:[], iptc:null, exif:null };
+      if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return out;
+      let i = 2;
+      while (i + 4 <= u8.length){
+        if (u8[i] !== 0xFF){ i++; continue; }
+        while (i < u8.length && u8[i] === 0xFF) i++;
+        if (i >= u8.length) break;
+        const marker = u8[i++];
+        if (marker === 0xDA || marker === 0xD9) break;
+        if (i + 2 > u8.length) break;
+        const len = view.getUint16(i, false);
+        const segStart = i - 2; const segDataStart = i + 2; const segEnd = i + len;
+        if (segEnd > u8.length) break;
+        if (marker === 0xE1){
+          if (bytesStartsWith(u8, segDataStart, segEnd, XMP_SIG) && !out.xmp) out.xmp = u8.slice(segStart, segEnd);
+          else if (bytesStartsWith(u8, segDataStart, segEnd, EXIF_SIG) && !out.exif) out.exif = u8.slice(segStart, segEnd);
+        } else if (marker === 0xE2){
+          if (bytesStartsWith(u8, segDataStart, segEnd, ICC_SIG)){
+            const seq   = u8[segDataStart + ICC_SIG.length] || 1;
+            const total = u8[segDataStart + ICC_SIG.length + 1] || 1;
+            out.icc.push({ seq, total, bytes: u8.slice(segStart, segEnd) });
+          }
+        } else if (marker === 0xED){
+          if (bytesStartsWith(u8, segDataStart, segEnd, PS_SIG) && !out.iptc) out.iptc = u8.slice(segStart, segEnd);
+        }
+        i = segEnd;
       }
-    });
+      out.icc.sort((a,b)=>a.seq-b.seq);
+      return out;
+    }
 
-    slider.addEventListener('input', () => {
-      crop.scale = slider.value;
-      drawCrop();
-    });
-
-    canvas.addEventListener('mousedown', e => {
-      dragging = true;
-      startX = e.offsetX;
-      startY = e.offsetY;
-    });
-
-    canvas.addEventListener('mousemove', e => {
-      if (dragging) {
-        crop.x -= (e.offsetX - startX) / crop.scale;
-        crop.y -= (e.offsetY - startY) / crop.scale;
-        startX = e.offsetX;
-        startY = e.offsetY;
-        drawCrop();
+    function buildMetaSegmentArray(metaObj, keepExif){
+      const segs = [];
+      if (keepExif && metaObj.exif){
+        const stripped = stripExifOrientation(metaObj.exif);
+        segs.push(stripped || metaObj.exif);
       }
-    });
+      if (metaObj.xmp) segs.push(metaObj.xmp);
+      if (metaObj.icc && metaObj.icc.length){ for (const c of metaObj.icc) segs.push(c.bytes); }
+      if (metaObj.iptc) segs.push(metaObj.iptc);
+      return segs;
+    }
 
-    canvas.addEventListener('mouseup', () => dragging = false);
+    function stripExifOrientation(app1Exif){
+      try{
+        let off = 4; // after FF E1 len
+        if (!(app1Exif[off]===0x45 && app1Exif[off+1]===0x78 && app1Exif[off+2]===0x69 && app1Exif[off+3]===0x66)) return app1Exif;
+        off += 6; // skip 'Exif  '
+        const dv = new DataView(app1Exif.buffer, app1Exif.byteOffset);
+        const little = (dv.getUint16(off, false) === 0x4949); // II or MM
+        const ifd0Offset = dv.getUint32(off+4, little);
+        if (ifd0Offset === 0) return app1Exif;
+        const ifd0 = off + ifd0Offset;
+        const count = dv.getUint16(ifd0, little);
+        for (let n=0;n<count;n++){
+          const e = ifd0 + 2 + n*12;
+          const tag = dv.getUint16(e, little);
+          if (tag === 0x0112){ // Orientation
+            const type = dv.getUint16(e+2, little); const num  = dv.getUint32(e+4, little);
+            if (type === 3 && num >= 1){
+              const valueOff = e+8; const view8 = new Uint8Array(app1Exif.buffer, app1Exif.byteOffset);
+              if (little){ view8[valueOff] = 1; view8[valueOff+1] = 0; } else { view8[valueOff] = 0; view8[valueOff+1] = 1; }
+              break;
+            }
+          }
+        }
+        return app1Exif;
+      }catch(e){ return app1Exif; }
+    }
 
-    document.getElementById('previewBtn').addEventListener('click', () => {
-      previewImg.src = canvas.toDataURL('image/jpeg');
-      previewImg.style.display = 'block';
-    });
-
-    document.getElementById('downloadBtn').addEventListener('click', () => {
-      let jpeg = canvas.toDataURL('image/jpeg');
-      if (exifData) {
-        const exifStr = piexif.dump(exifData);
-        jpeg = piexif.insert(exifStr, jpeg);
+    async function attachMetadataToJpegBlob(blob, metaSegments){
+      if (!metaSegments || metaSegments.length === 0) return blob;
+      const outBuf = await blob.arrayBuffer();
+      const u8 = new Uint8Array(outBuf);
+      if (u8.length < 4 || u8[0] !== 0xFF || u8[1] !== 0xD8) return blob;
+      let insertPos = 2; let p = 2;
+      while (p + 4 < u8.length && u8[p] === 0xFF && u8[p+1] === 0xE0){
+        const len = (u8[p+2] << 8) | u8[p+3]; const next = p + 2 + len; if (next <= u8.length){ insertPos = next; p = next; } else { break; }
       }
-      const link = document.createElement('a');
-      link.download = 'crop.jpg';
-      link.href = jpeg;
-      link.click();
+      const metaLen = metaSegments.reduce((sum, seg) => sum + seg.length, 0);
+      const merged = new Uint8Array(u8.length + metaLen);
+      merged.set(u8.subarray(0, insertPos), 0);
+      let off2 = insertPos; for (const seg of metaSegments){ merged.set(seg, off2); off2 += seg.length; }
+      merged.set(u8.subarray(insertPos), off2);
+      return new Blob([merged], { type: 'image/jpeg' });
+    }
+
+    function schedulePreviewUpdate(){
+      if (previewRAF) return;
+      previewRAF = requestAnimationFrame(() => {
+        previewRAF = null;
+        const c = renderCroppedToCanvas();
+        if (!c) return;
+        c.toBlob(async (blob)=>{
+          if (!blob) return;
+          originalMetaSegments = buildMetaSegmentArray(originalMeta, keepExifChk.checked);
+          const withMeta = await attachMetadataToJpegBlob(blob, originalMetaSegments);
+          const url = URL.createObjectURL(withMeta);
+          if (currentPreviewURL) URL.revokeObjectURL(currentPreviewURL);
+          currentPreviewURL = url;
+          modalImg.src = url; saveFromModal.href = url;
+        }, 'image/jpeg', 0.92);
+      });
+    }
+
+    function setMetaChip(iptc,xmp,icc){
+      tagIPTC.textContent = `IPTC ${iptc ? '✓' : '—'}`;
+      tagXMP.textContent  = `XMP ${xmp ? '✓' : '—'}`;
+      tagICC.textContent  = `ICC ${icc ? '✓' : '—'}`;
+    }
+    function openPreview(){
+      previewOpen = true;
+      schedulePreviewUpdate();
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden','false');
+    }
+    previewBtn.addEventListener('click', openPreview);
+    closeModal.addEventListener('click', ()=>{
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden','true');
+      previewOpen = false;
+      if (currentPreviewURL) { URL.revokeObjectURL(currentPreviewURL); currentPreviewURL = null; }
+      modalImg.src='';
+    });
+    modal.addEventListener('click', (e)=>{ if(e.target===modal) { closeModal.click(); } });
+
+    // Download (no resizing)
+    downloadBtn.addEventListener('click', () => {
+      const outCanvas = renderCroppedToCanvas(); if (!outCanvas) { alert('Upload an image first.'); return; }
+      outCanvas.toBlob(async (blob)=>{
+        if(!blob){ alert('Export failed.'); return; }
+        try {
+          const withMeta = await attachMetadataToJpegBlob(blob, originalMetaSegments);
+          const a=document.createElement('a'); const url=URL.createObjectURL(withMeta); a.href=url; a.download='crop.jpg';
+          document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
+        } catch(e){
+          alert('Exported without IPTC metadata due to an error.');
+          const a=document.createElement('a'); const url=URL.createObjectURL(blob); a.href=url; a.download='crop.jpg';
+          document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 1000);
+        }
+      }, 'image/jpeg', 0.92);
     });
 
-    document.getElementById('undoBtn').addEventListener('click', () => {
-      crop.scale = 1;
-      crop.x = 0;
-      crop.y = 0;
-      drawCrop();
+    // Undo & Start Over
+    undoBtn.addEventListener('click', ()=>{
+      const prev = popHistory(); if (!prev) return;
+      ratioStr = prev.ratioStr; chips.forEach(c=>c.classList.toggle('active', c.dataset.ratio===ratioStr));
+      cropCenter = { ...prev.cropCenter }; zoom.value = prev.zoom; zoomOut.textContent = `${Number(zoom.value).toFixed(2)}×`;
+      draw();
     });
 
-    document.getElementById('resetBtn').addEventListener('click', () => {
-      location.reload();
+    startOverBtn.addEventListener('click', ()=>{ clearToStart(); });
+
+    // toggle rebuilds the metadata ordering for next preview/download
+    keepExifChk.addEventListener('change', ()=>{
+      originalMetaSegments = buildMetaSegmentArray(originalMeta, keepExifChk.checked);
     });
 
-    // Upload via click
-    uploadArea.addEventListener('click', () => uploadInput.click());
-    uploadInput.addEventListener('change', e => loadImage(e.target.files[0]));
-
-    // Drag and drop
-    uploadArea.addEventListener('dragover', e => {
-      e.preventDefault();
-      uploadArea.classList.add('dragover');
-    });
-    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-    uploadArea.addEventListener('drop', e => {
-      e.preventDefault();
-      uploadArea.classList.remove('dragover');
-      const file = e.dataTransfer.files[0];
-      if (file) loadImage(file);
-    });
+    // initial paint
+    draw();
   </script>
 </body>
 </html>
