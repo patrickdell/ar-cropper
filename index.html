@@ -38,6 +38,8 @@
     .modal-card { background: #0f131a; border:1px solid var(--line); border-radius: 14px; max-width: 90vw; max-height: 90vh; padding: 12px; }
     .modal-card img { max-width: 85vw; max-height: 80vh; display:block; border-radius: 10px; }
     .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top: 8px; }
+      /* drag & drop hint */
+    .preview.drop { outline: 2px dashed var(--accent); outline-offset: 6px; }
   </style>
 </head>
 <body>
@@ -79,7 +81,7 @@
         </div>
 
         <div style="grid-column: span 12;">
-          <div class="preview">
+          <div class="preview" id="dropZone">
             <canvas id="previewCanvas" width="960" height="540"></canvas>
           </div>
           <div class="zoomrow" style="margin-top:10px;">
@@ -119,6 +121,7 @@
     const fileInput = document.getElementById('file');
     const chips = Array.from(document.querySelectorAll('.chip'));
     const previewCanvas = document.getElementById('previewCanvas');
+    const dropZone = document.getElementById('dropZone');
     const ctx = previewCanvas.getContext('2d');
     const zoom = document.getElementById('zoom');
     const zoomOut = document.getElementById('zoomOut');
@@ -265,13 +268,15 @@
       if (handled){ e.preventDefault(); draw(); }
     });
 
-    // file handling
-    fileInput.addEventListener('change', () => {
-      const file = fileInput.files && fileInput.files[0];
+    // file handling (input + drag&drop)
+    async function loadFile(file){
       if (!file) { clearToStart(); return; }
       const url = URL.createObjectURL(file);
       const image = new Image();
-      image.onload = async () => { URL.revokeObjectURL(url); img=image; enableControls(); chips.forEach(c=>c.classList.remove('active')); chips[0].classList.add('active'); ratioStr = chips[0].dataset.ratio; resetCrop(); history.length=0; draw();
+      image.onload = async () => {
+        URL.revokeObjectURL(url);
+        img=image; enableControls(); chips.forEach(c=>c.classList.remove('active')); chips[0].classList.add('active');
+        ratioStr = chips[0].dataset.ratio; resetCrop(); history.length=0; draw();
         try {
           const buf = await file.arrayBuffer();
           const det = detectMetadataKinds(buf); setMetaChip(det.hasIPTC, det.hasXMP, det.hasICC);
@@ -281,7 +286,26 @@
       };
       image.onerror = () => { URL.revokeObjectURL(url); alert('Failed to load image.'); };
       image.src = url;
+    }
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files && fileInput.files[0];
+      loadFile(file);
     });
+
+    // drag & drop support on the preview card
+    ;['dragenter','dragover'].forEach(evt => dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.add('drop'); }));
+    ;['dragleave','dragend'].forEach(evt => dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('drop'); }));
+    dropZone.addEventListener('drop', (e)=>{
+      e.preventDefault(); e.stopPropagation(); dropZone.classList.remove('drop');
+      const dt = e.dataTransfer; if (!dt) return; const file = (dt.files && dt.files[0]) || null;
+      if (!file) return; if (!file.type || !file.type.startsWith('image/')) { alert('Please drop an image file.'); return; }
+      loadFile(file);
+    });
+
+    // prevent the browser from opening the file when dropped outside
+    window.addEventListener('dragover', e=>e.preventDefault());
+    window.addEventListener('drop', e=>e.preventDefault());
 
     function clearToStart(){
       img=null; history.length=0; ctx.clearRect(0,0,previewCanvas.width,previewCanvas.height);
